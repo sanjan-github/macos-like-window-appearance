@@ -2,13 +2,13 @@
 // @id           macos-like-window-appearance-safe
 // @name         macOS-like Window Appearance (Safe)
 // @description  Applies polished Windows 11 rounded corners, suppresses the DWM outline, and optionally gives ordinary app windows a one-time centered golden-ratio size without polling, timers, window enumeration, or system-file changes.
-// @version      1.3.0
+// @version      1.4.0
 // @author       sanjan-github
 // @github       https://github.com/sanjan-github/macos-like-window-appearance
 // @include      *
 // @exclude      dwm.exe
 // @architecture x86-64
-// @compilerOptions -ldwmapi
+// @compilerOptions -ldwmapi -lgdi32
 // ==/WindhawkMod==
 
 // This mod intentionally changes appearance and optional initial geometry only.
@@ -73,6 +73,7 @@ public native rounded treatment instead of patching private DWM geometry.
   $options:
   - native: Normal rounded corners
   - small: Small rounded corners
+  - custom: Custom radius using a rounded window region
   - extra: Experimental extra-rounded corners
   - default: Let Windows decide
 - border: none
@@ -93,6 +94,9 @@ public native rounded treatment instead of patching private DWM geometry.
 - extraRadius: 24
   $name: Experimental extra radius
   $description: Corner diameter in pixels for extra mode. Values are clamped between 12 and 64. This mode uses a window region and may not suit custom-framed applications.
+- customRadius: 24
+  $name: Custom radius
+  $description: Corner diameter in pixels for custom mode. Values are clamped between 4 and 96. Custom mode uses a window region and may not suit custom-framed applications.
 */
 // ==/WindhawkModSettings==
 
@@ -105,6 +109,7 @@ namespace {
 enum class RoundingStyle {
     Native,
     Small,
+    Custom,
     Extra,
     Default,
 };
@@ -116,6 +121,7 @@ struct Settings {
     bool goldenRatioSize = true;
     int goldenRatioWidthPercent = 62;
     int extraRadius = 24;
+    int customRadius = 24;
 };
 
 Settings g_settings;
@@ -185,6 +191,9 @@ void ApplyWindowAppearance(HWND hwnd) {
         case RoundingStyle::Extra:
             preference = DWMWCP_ROUND;
             break;
+        case RoundingStyle::Custom:
+            preference = DWMWCP_ROUND;
+            break;
         case RoundingStyle::Default:
             preference = DWMWCP_DEFAULT;
             break;
@@ -221,7 +230,8 @@ void ApplyExtraRoundedRegion(HWND hwnd) {
 
     g_updatingRegion = true;
 
-    if (g_settings.rounding != RoundingStyle::Extra || IsZoomed(hwnd)) {
+    if ((g_settings.rounding != RoundingStyle::Extra &&
+         g_settings.rounding != RoundingStyle::Custom) || IsZoomed(hwnd)) {
         (void)SetWindowRgn(hwnd, nullptr, TRUE);
         g_updatingRegion = false;
         return;
@@ -240,8 +250,16 @@ void ApplyExtraRoundedRegion(HWND hwnd) {
         return;
     }
 
-    int radius = g_settings.extraRadius;
-    if (radius < 12) {
+    int radius = g_settings.rounding == RoundingStyle::Custom
+                     ? g_settings.customRadius
+                     : g_settings.extraRadius;
+    if (g_settings.rounding == RoundingStyle::Custom) {
+        if (radius < 4) {
+            radius = 4;
+        } else if (radius > 96) {
+            radius = 96;
+        }
+    } else if (radius < 12) {
         radius = 12;
     } else if (radius > 64) {
         radius = 64;
@@ -366,6 +384,8 @@ RoundingStyle LoadRoundingStyle() {
             result = RoundingStyle::Small;
         } else if (_wcsicmp(value, L"extra") == 0) {
             result = RoundingStyle::Extra;
+        } else if (_wcsicmp(value, L"custom") == 0) {
+            result = RoundingStyle::Custom;
         } else if (_wcsicmp(value, L"default") == 0) {
             result = RoundingStyle::Default;
         }
@@ -394,6 +414,7 @@ void LoadSettings() {
     g_settings.goldenRatioWidthPercent =
         Wh_GetIntSetting(L"goldenRatioWidthPercent", 62);
     g_settings.extraRadius = Wh_GetIntSetting(L"extraRadius", 24);
+    g_settings.customRadius = Wh_GetIntSetting(L"customRadius", 24);
 }
 
 }  // namespace

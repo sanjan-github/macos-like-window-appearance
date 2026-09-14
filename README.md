@@ -179,3 +179,28 @@ Use it only after testing the normal mode:
 The radius is clamped between 12 and 64 pixels. The default remains `native` because window regions can clip custom shadows, custom frames, menus, video surfaces, or application-rendered content. Maximized windows automatically restore their rectangular region. Disable the mode if an application shows clipped content, incorrect shadows, or resize problems.
 
 This experimental mode is still bounded and does not use timers, threads, polling, or window enumeration, but it is less compatible than the native mode because it changes the window shape with `SetWindowRgn`.
+
+
+## Custom radius mode
+
+Version 1.4 adds a first-class `custom` rounding style alongside `native`, `small`, and the backward-compatible `extra` mode.
+
+Use:
+
+```text
+Rounding style: custom
+Custom radius: 32
+Window border: none
+```
+
+The custom radius is clamped to 4–96 pixels and is applied through a rounded native window region. Smaller values produce subtle rounding; values around 24–32 produce a visibly softer macOS-like appearance. The default remains `native` for maximum compatibility.
+
+## Linker fix in version 1.4
+
+The extra/custom region implementation calls the GDI functions `CreateRoundRectRgn` and `DeleteObject`. The Windhawk compiler must link the GDI library, so the source metadata now includes:
+
+```cpp
+// @compilerOptions -ldwmapi -lgdi32
+```
+
+Without `-lgdi32`, Windhawk reports undefined symbols for those two functions.
