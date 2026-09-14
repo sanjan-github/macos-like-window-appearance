@@ -162,3 +162,20 @@ Temporarily disable other appearance, DWM, title-bar, transparency, or corner-ra
 - [macOS window-corner design analysis](https://lapcatsoftware.com/articles/2026/3/4.html)
 
 Apple uses different radii for some toolbar and titlebar window styles and does not publish one universal radius. Windows 11's public API exposes a corner preference rather than an arbitrary pixel radius. This mod therefore chooses the public native rounded treatment instead of patching private DWM geometry.
+
+
+## Experimental extra-rounded mode
+
+Version 1.3 adds an opt-in `extra` rounding style. It uses a bounded native `CreateRoundRectRgn` window region and reapplies that region after resize operations so the corners remain aligned. This can produce visibly rounder corners than Windows 11's public DWM preference.
+
+Use it only after testing the normal mode:
+
+| Setting | Recommended value |
+|---|---:|
+| Rounding style | `extra` |
+| Experimental extra radius | `24` |
+| Window border | `none` |
+
+The radius is clamped between 12 and 64 pixels. The default remains `native` because window regions can clip custom shadows, custom frames, menus, video surfaces, or application-rendered content. Maximized windows automatically restore their rectangular region. Disable the mode if an application shows clipped content, incorrect shadows, or resize problems.
+
+This experimental mode is still bounded and does not use timers, threads, polling, or window enumeration, but it is less compatible than the native mode because it changes the window shape with `SetWindowRgn`.

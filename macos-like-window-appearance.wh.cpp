@@ -2,7 +2,7 @@
 // @id           macos-like-window-appearance-safe
 // @name         macOS-like Window Appearance (Safe)
 // @description  Applies polished Windows 11 rounded corners, suppresses the DWM outline, and optionally gives ordinary app windows a one-time centered golden-ratio size without polling, timers, window enumeration, or system-file changes.
-// @version      1.2.0
+// @version      1.3.0
 // @author       sanjan-github
 // @github       https://github.com/sanjan-github/macos-like-window-appearance
 // @include      *
@@ -73,6 +73,7 @@ public native rounded treatment instead of patching private DWM geometry.
   $options:
   - native: Normal rounded corners
   - small: Small rounded corners
+  - extra: Experimental extra-rounded corners
   - default: Let Windows decide
 - border: none
   $name: Window border
@@ -89,6 +90,9 @@ public native rounded treatment instead of patching private DWM geometry.
 - goldenRatioWidthPercent: 62
   $name: Golden-ratio width percent
   $description: Initial window width as a percentage of the monitor work area. Values are clamped between 40 and 85.
+- extraRadius: 24
+  $name: Experimental extra radius
+  $description: Corner diameter in pixels for extra mode. Values are clamped between 12 and 64. This mode uses a window region and may not suit custom-framed applications.
 */
 // ==/WindhawkModSettings==
 
@@ -101,6 +105,7 @@ namespace {
 enum class RoundingStyle {
     Native,
     Small,
+    Extra,
     Default,
 };
 
@@ -110,6 +115,7 @@ struct Settings {
     bool skipToolWindows = true;
     bool goldenRatioSize = true;
     int goldenRatioWidthPercent = 62;
+    int extraRadius = 24;
 };
 
 Settings g_settings;
@@ -121,6 +127,11 @@ CreateWindowExW_t CreateWindowExW_Original = nullptr;
 
 using ShowWindow_t = BOOL(WINAPI*)(HWND, int);
 ShowWindow_t ShowWindow_Original = nullptr;
+
+using SetWindowPos_t = BOOL(WINAPI*)(
+    HWND, HWND, int, int, int, int, UINT);
+SetWindowPos_t SetWindowPos_Original = nullptr;
+thread_local bool g_updatingRegion = false;
 
 constexpr wchar_t kInitialLayoutProperty[] =
     L"macos_like_window_appearance_initial_layout_1";
@@ -171,6 +182,9 @@ void ApplyWindowAppearance(HWND hwnd) {
         case RoundingStyle::Small:
             preference = DWMWCP_ROUNDSMALL;
             break;
+        case RoundingStyle::Extra:
+            preference = DWMWCP_ROUND;
+            break;
         case RoundingStyle::Default:
             preference = DWMWCP_DEFAULT;
             break;
@@ -198,6 +212,53 @@ void ApplyWindowAppearance(HWND hwnd) {
         kDwmwaBorderColor,
         &borderColor,
         sizeof(borderColor));
+}
+
+void ApplyExtraRoundedRegion(HWND hwnd) {
+    if (g_updatingRegion || hwnd == nullptr || !IsOrdinaryWindow(hwnd)) {
+        return;
+    }
+
+    g_updatingRegion = true;
+
+    if (g_settings.rounding != RoundingStyle::Extra || IsZoomed(hwnd)) {
+        (void)SetWindowRgn(hwnd, nullptr, TRUE);
+        g_updatingRegion = false;
+        return;
+    }
+
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) {
+        g_updatingRegion = false;
+        return;
+    }
+
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+    if (width < 2 || height < 2) {
+        g_updatingRegion = false;
+        return;
+    }
+
+    int radius = g_settings.extraRadius;
+    if (radius < 12) {
+        radius = 12;
+    } else if (radius > 64) {
+        radius = 64;
+    }
+
+    HRGN region = CreateRoundRectRgn(
+        0, 0, width + 1, height + 1, radius * 2, radius * 2);
+    if (region == nullptr) {
+        g_updatingRegion = false;
+        return;
+    }
+
+    // SetWindowRgn takes ownership of region on success.
+    if (SetWindowRgn(hwnd, region, TRUE) == 0) {
+        DeleteObject(region);
+    }
+    g_updatingRegion = false;
 }
 
 void ApplyInitialGoldenRatioSize(HWND hwnd) {
@@ -280,9 +341,20 @@ BOOL WINAPI ShowWindow_Hook(HWND hwnd, int command) {
         // Reapply immediately before display, without a timer or watcher.
         ApplyWindowAppearance(hwnd);
         ApplyInitialGoldenRatioSize(hwnd);
+        ApplyExtraRoundedRegion(hwnd);
     }
 
     return ShowWindow_Original(hwnd, command);
+}
+
+BOOL WINAPI SetWindowPos_Hook(
+    HWND hwnd, HWND insertAfter, int x, int y, int cx, int cy, UINT flags) {
+    BOOL result = SetWindowPos_Original(
+        hwnd, insertAfter, x, y, cx, cy, flags);
+    if (result && hwnd != nullptr && IsOrdinaryWindow(hwnd)) {
+        ApplyExtraRoundedRegion(hwnd);
+    }
+    return result;
 }
 
 RoundingStyle LoadRoundingStyle() {
@@ -292,6 +364,8 @@ RoundingStyle LoadRoundingStyle() {
     if (value != nullptr) {
         if (_wcsicmp(value, L"small") == 0) {
             result = RoundingStyle::Small;
+        } else if (_wcsicmp(value, L"extra") == 0) {
+            result = RoundingStyle::Extra;
         } else if (_wcsicmp(value, L"default") == 0) {
             result = RoundingStyle::Default;
         }
@@ -319,6 +393,7 @@ void LoadSettings() {
         Wh_GetIntSetting(L"goldenRatioSize", 1) != 0;
     g_settings.goldenRatioWidthPercent =
         Wh_GetIntSetting(L"goldenRatioWidthPercent", 62);
+    g_settings.extraRadius = Wh_GetIntSetting(L"extraRadius", 24);
 }
 
 }  // namespace
@@ -341,6 +416,13 @@ BOOL Wh_ModInit() {
         // Appearance still works at creation time if this optional hook is
         // unavailable. Do not fail the complete mod for the layout hook.
         Wh_Log(L"ShowWindow hook unavailable; first-show reapplication disabled.");
+    }
+
+    if (!Wh_SetFunctionHook(
+            reinterpret_cast<void*>(&SetWindowPos),
+            reinterpret_cast<void*>(&SetWindowPos_Hook),
+            reinterpret_cast<void**>(&SetWindowPos_Original))) {
+        Wh_Log(L"SetWindowPos hook unavailable; extra radius updates only on show.");
     }
 
     return TRUE;
