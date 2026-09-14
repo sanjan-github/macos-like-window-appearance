@@ -1,0 +1,6 @@
+# Windhawk/editor and local build artifacts
+*.log
+*.obj
+*.pdb
+*.dll
+*.exe
