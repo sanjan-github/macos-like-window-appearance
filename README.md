@@ -176,7 +176,7 @@ Use it only after testing the normal mode:
 | Experimental extra radius | `24` |
 | Window border | `none` |
 
-The radius is clamped between 12 and 64 pixels. The default remains `native` because window regions can clip custom shadows, custom frames, menus, video surfaces, or application-rendered content. Maximized windows automatically restore their rectangular region. Disable the mode if an application shows clipped content, incorrect shadows, or resize problems.
+The radius is clamped between 12 and 64 pixels. The setting is a **radius**, not a diameter. The default remains `native` because window regions can clip custom shadows, custom frames, menus, video surfaces, or application-rendered content. Maximized windows automatically restore their rectangular region. Disable the mode if an application shows clipped content, incorrect shadows, or resize problems.
 
 This experimental mode is still bounded and does not use timers, threads, polling, or window enumeration, but it is less compatible than the native mode because it changes the window shape with `SetWindowRgn`.
 
@@ -221,3 +221,17 @@ Window border: none
 The accepted custom-radius input range is **4–160 pixels**. Values near **96–160** create an almost-squircle appearance. The mod clamps the final value to half of the window's smaller dimension, preventing the rounded region from collapsing the window interior.
 
 If an application still loses caption-button interaction, switch back to `native`, restart the application, and exclude that application from the mod. Custom-framed and borderless applications can implement their own hit testing and are not universally compatible with a window-region approach.
+
+## Version 1.6 visual-artifact fix
+
+Selecting **extra** or **custom** rounding previously stacked Windows 11 DWM rounding on top of a GDI window region, rebuilt that region on every `SetWindowPos` (including z-order and activation), unioned a square caption-button rectangle into the outline, and cleared `SetWindowRgn` on windows the mod did not own. The result was flicker, jagged double-corners, and a square notch around the min/max/close buttons.
+
+Version 1.6:
+
+- lets the window region own the shape (`DWMWCP_DONOTROUND`) in extra/custom modes;
+- rebuilds the region only when size or radius actually changed;
+- preserves caption-button pixels with a lightly rounded strip instead of a square corner;
+- never clears a region the application created itself;
+- skips layered windows, which already define their own shape.
+
+Restart affected applications after switching rounding style so the new path is applied.
