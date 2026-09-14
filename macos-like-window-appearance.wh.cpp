@@ -2,13 +2,13 @@
 // @id           macos-like-window-appearance-safe
 // @name         macOS-like Window Appearance (Safe)
 // @description  Applies polished Windows 11 rounded corners, suppresses the DWM outline, and optionally gives ordinary app windows a one-time centered golden-ratio size without polling, timers, window enumeration, or system-file changes.
-// @version      1.6.0
+// @version      1.7.0
 // @author       sanjan-github
 // @github       https://github.com/sanjan-github/macos-like-window-appearance
 // @include      *
 // @exclude      dwm.exe
 // @architecture x86-64
-// @compilerOptions -ldwmapi -lgdi32
+// @compilerOptions -ldwmapi
 // ==/WindhawkMod==
 
 // This mod intentionally changes appearance and optional initial geometry only.
@@ -58,8 +58,8 @@ per-pixel alpha, or unusual frames may remain square. The visible line around
 a window may also be drawn by the application itself or may be a shadow; the
 DWM border setting can only suppress the DWM-drawn border.
 
-Apple uses different radii for some toolbar and titlebar window styles and does
-not publish one universal radius. Windows 11's public API exposes a corner
+Apple uses different radii for some toolbar and titlebar window styles and
+does not publish one universal radius. Windows 11's public API exposes a corner
 preference rather than an arbitrary pixel radius, so this mod chooses the
 public native rounded treatment instead of patching private DWM geometry.
 */
@@ -69,12 +69,10 @@ public native rounded treatment instead of patching private DWM geometry.
 /*
 - rounding: native
   $name: Rounding style
-  $description: Native uses normal Windows 11 rounded corners; small uses the native small-corner style; custom lets you enter a radius.
+  $description: Native uses normal Windows 11 rounded corners; small uses the native small-corner style.
   $options:
   - native: Normal rounded corners
   - small: Small rounded corners
-  - custom: Custom radius using a rounded window region
-  - extra: Experimental extra-rounded corners
   - default: Let Windows decide
 - border: none
   $name: Window border
@@ -91,12 +89,6 @@ public native rounded treatment instead of patching private DWM geometry.
 - goldenRatioWidthPercent: 62
   $name: Golden-ratio width percent
   $description: Initial window width as a percentage of the monitor work area. Values are clamped between 40 and 85.
-- extraRadius: 24
-  $name: Experimental extra radius
-  $description: Corner radius in pixels for extra mode. Values are clamped between 12 and 64. This mode uses a window region and may not suit custom-framed applications.
-- customRadius: 24
-  $name: Custom radius
-  $description: Enter a radius from 4 to 160 pixels. Values near 96 to 160 create an almost squircle shape. The value is safely clamped for each window, and caption buttons remain clickable.
 */
 // ==/WindhawkModSettings==
 
@@ -109,8 +101,6 @@ namespace {
 enum class RoundingStyle {
     Native,
     Small,
-    Custom,
-    Extra,
     Default,
 };
 
@@ -120,8 +110,6 @@ struct Settings {
     bool skipToolWindows = true;
     bool goldenRatioSize = true;
     int goldenRatioWidthPercent = 62;
-    int extraRadius = 24;
-    int customRadius = 24;
 };
 
 Settings g_settings;
@@ -134,91 +122,8 @@ CreateWindowExW_t CreateWindowExW_Original = nullptr;
 using ShowWindow_t = BOOL(WINAPI*)(HWND, int);
 ShowWindow_t ShowWindow_Original = nullptr;
 
-using SetWindowPos_t = BOOL(WINAPI*)(
-    HWND, HWND, int, int, int, int, UINT);
-SetWindowPos_t SetWindowPos_Original = nullptr;
-thread_local bool g_updatingRegion = false;
-
 constexpr wchar_t kInitialLayoutProperty[] =
     L"macos_like_window_appearance_initial_layout_1";
-constexpr wchar_t kRegionAppliedProperty[] =
-    L"macos_like_window_appearance_region_applied_16";
-constexpr wchar_t kRegionGeometryProperty[] =
-    L"macos_like_window_appearance_region_geometry_16";
-
-// DWMWCP_DONOTROUND == 1. Numeric form stays valid with older Windhawk headers.
-constexpr DWM_WINDOW_CORNER_PREFERENCE kDwmwcpDoNotRound =
-    static_cast<DWM_WINDOW_CORNER_PREFERENCE>(1);
-
-bool UsesCustomWindowRegion() {
-    return g_settings.rounding == RoundingStyle::Extra ||
-           g_settings.rounding == RoundingStyle::Custom;
-}
-
-bool WeAppliedWindowRegion(HWND hwnd) {
-    return GetPropW(hwnd, kRegionAppliedProperty) != nullptr;
-}
-
-void MarkWindowRegionApplied(HWND hwnd, bool applied) {
-    if (applied) {
-        (void)SetPropW(
-            hwnd, kRegionAppliedProperty, reinterpret_cast<HANDLE>(1));
-    } else {
-        (void)RemovePropW(hwnd, kRegionAppliedProperty);
-        (void)RemovePropW(hwnd, kRegionGeometryProperty);
-    }
-}
-
-HANDLE PackRegionGeometry(int width, int height, int radius) {
-    ULONGLONG packed =
-        (static_cast<ULONGLONG>(static_cast<unsigned int>(width) & 0xFFFFu)
-         << 32) |
-        (static_cast<ULONGLONG>(static_cast<unsigned int>(height) & 0xFFFFu)
-         << 16) |
-        static_cast<ULONGLONG>(static_cast<unsigned int>(radius) & 0xFFFFu);
-    return reinterpret_cast<HANDLE>(packed);
-}
-
-bool RegionGeometryUnchanged(HWND hwnd, int width, int height, int radius) {
-    HANDLE packed = PackRegionGeometry(width, height, radius);
-    return GetPropW(hwnd, kRegionGeometryProperty) == packed;
-}
-
-void RememberRegionGeometry(HWND hwnd, int width, int height, int radius) {
-    (void)SetPropW(
-        hwnd, kRegionGeometryProperty,
-        PackRegionGeometry(width, height, radius));
-}
-
-bool WindowHasForeignRegion(HWND hwnd) {
-    if (WeAppliedWindowRegion(hwnd)) {
-        return false;
-    }
-
-    HRGN existing = CreateRectRgn(0, 0, 0, 0);
-    if (existing == nullptr) {
-        return false;
-    }
-    int type = GetWindowRgn(hwnd, existing);
-    DeleteObject(existing);
-    return type != ERROR;
-}
-
-bool ShouldSkipRegionWindow(HWND hwnd) {
-    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if ((exStyle & WS_EX_LAYERED) != 0) {
-        return true;
-    }
-    return WindowHasForeignRegion(hwnd);
-}
-
-void ClearModWindowRegion(HWND hwnd) {
-    if (!WeAppliedWindowRegion(hwnd)) {
-        return;
-    }
-    (void)SetWindowRgn(hwnd, nullptr, TRUE);
-    MarkWindowRegionApplied(hwnd, false);
-}
 
 bool IsOrdinaryWindow(HWND hwnd) {
     if (hwnd == nullptr || GetWindow(hwnd, GW_OWNER) != nullptr) {
@@ -266,12 +171,6 @@ void ApplyWindowAppearance(HWND hwnd) {
         case RoundingStyle::Small:
             preference = DWMWCP_ROUNDSMALL;
             break;
-        case RoundingStyle::Extra:
-        case RoundingStyle::Custom:
-            // Region clipping plus DWM rounding produces jagged double-corners
-            // and black/transparent artifacts. Let the region own the shape.
-            preference = kDwmwcpDoNotRound;
-            break;
         case RoundingStyle::Default:
             preference = DWMWCP_DEFAULT;
             break;
@@ -299,127 +198,6 @@ void ApplyWindowAppearance(HWND hwnd) {
         kDwmwaBorderColor,
         &borderColor,
         sizeof(borderColor));
-}
-
-void ApplyExtraRoundedRegion(HWND hwnd) {
-    if (g_updatingRegion || hwnd == nullptr || !IsOrdinaryWindow(hwnd)) {
-        return;
-    }
-
-    g_updatingRegion = true;
-
-    if (!UsesCustomWindowRegion() || IsZoomed(hwnd) ||
-        ShouldSkipRegionWindow(hwnd)) {
-        ClearModWindowRegion(hwnd);
-        g_updatingRegion = false;
-        return;
-    }
-
-    RECT rect{};
-    if (!GetWindowRect(hwnd, &rect)) {
-        g_updatingRegion = false;
-        return;
-    }
-
-    int width = rect.right - rect.left;
-    int height = rect.bottom - rect.top;
-    if (width < 2 || height < 2) {
-        g_updatingRegion = false;
-        return;
-    }
-
-    int radius = g_settings.rounding == RoundingStyle::Custom
-                     ? g_settings.customRadius
-                     : g_settings.extraRadius;
-    if (g_settings.rounding == RoundingStyle::Custom) {
-        if (radius < 4) {
-            radius = 4;
-        } else if (radius > 160) {
-            radius = 160;
-        }
-    } else if (radius < 12) {
-        radius = 12;
-    } else if (radius > 64) {
-        radius = 64;
-    }
-
-    // Never let the ellipse consume an entire dimension. This keeps a usable
-    // interior even when a user requests an almost-squircle radius.
-    int geometricMaximum = (width < height ? width : height) / 2 - 1;
-    if (geometricMaximum < 1) {
-        g_updatingRegion = false;
-        return;
-    }
-    if (radius > geometricMaximum) {
-        radius = geometricMaximum;
-    }
-
-    if (RegionGeometryUnchanged(hwnd, width, height, radius)) {
-        g_updatingRegion = false;
-        return;
-    }
-
-    HRGN region = CreateRoundRectRgn(
-        0, 0, width + 1, height + 1, radius * 2, radius * 2);
-    if (region == nullptr) {
-        g_updatingRegion = false;
-        return;
-    }
-
-    // Keep caption buttons clickable without restoring a square top-right
-    // corner. Union only the caption-button strip of a lightly rounded copy
-    // of the window, so the outer edge stays curved.
-    RECT captionButtons{};
-    if (radius > 8 &&
-        SUCCEEDED(DwmGetWindowAttribute(
-            hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &captionButtons,
-            sizeof(captionButtons)))) {
-        UINT dpi = GetDpiForWindow(hwnd);
-        if (dpi == 0) {
-            dpi = 96;
-        }
-        int pad = MulDiv(6, static_cast<int>(dpi), 96);
-        HRGN lightRound = CreateRoundRectRgn(
-            0, 0, width + 1, height + 1, 16, 16);
-        HRGN captionClip = CreateRectRgn(
-            captionButtons.left - pad,
-            captionButtons.top - pad,
-            width + 1,
-            captionButtons.bottom + pad);
-        HRGN captionSafety = CreateRectRgn(0, 0, 0, 0);
-        if (lightRound != nullptr && captionClip != nullptr &&
-            captionSafety != nullptr &&
-            CombineRgn(captionSafety, lightRound, captionClip, RGN_AND) !=
-                ERROR) {
-            HRGN combined = CreateRectRgn(0, 0, 0, 0);
-            if (combined != nullptr &&
-                CombineRgn(combined, region, captionSafety, RGN_OR) !=
-                    ERROR) {
-                DeleteObject(region);
-                region = combined;
-            } else if (combined != nullptr) {
-                DeleteObject(combined);
-            }
-        }
-        if (lightRound != nullptr) {
-            DeleteObject(lightRound);
-        }
-        if (captionClip != nullptr) {
-            DeleteObject(captionClip);
-        }
-        if (captionSafety != nullptr) {
-            DeleteObject(captionSafety);
-        }
-    }
-
-    // SetWindowRgn takes ownership of region on success.
-    if (SetWindowRgn(hwnd, region, TRUE) != 0) {
-        MarkWindowRegionApplied(hwnd, true);
-        RememberRegionGeometry(hwnd, width, height, radius);
-    } else {
-        DeleteObject(region);
-    }
-    g_updatingRegion = false;
 }
 
 void ApplyInitialGoldenRatioSize(HWND hwnd) {
@@ -502,21 +280,9 @@ BOOL WINAPI ShowWindow_Hook(HWND hwnd, int command) {
         // Reapply immediately before display, without a timer or watcher.
         ApplyWindowAppearance(hwnd);
         ApplyInitialGoldenRatioSize(hwnd);
-        ApplyExtraRoundedRegion(hwnd);
     }
 
     return ShowWindow_Original(hwnd, command);
-}
-
-BOOL WINAPI SetWindowPos_Hook(
-    HWND hwnd, HWND insertAfter, int x, int y, int cx, int cy, UINT flags) {
-    BOOL result = SetWindowPos_Original(
-        hwnd, insertAfter, x, y, cx, cy, flags);
-    if (result && hwnd != nullptr && !g_updatingRegion &&
-        IsOrdinaryWindow(hwnd)) {
-        ApplyExtraRoundedRegion(hwnd);
-    }
-    return result;
 }
 
 RoundingStyle LoadRoundingStyle() {
@@ -526,10 +292,6 @@ RoundingStyle LoadRoundingStyle() {
     if (value != nullptr) {
         if (_wcsicmp(value, L"small") == 0) {
             result = RoundingStyle::Small;
-        } else if (_wcsicmp(value, L"extra") == 0) {
-            result = RoundingStyle::Extra;
-        } else if (_wcsicmp(value, L"custom") == 0) {
-            result = RoundingStyle::Custom;
         } else if (_wcsicmp(value, L"default") == 0) {
             result = RoundingStyle::Default;
         }
@@ -557,8 +319,6 @@ void LoadSettings() {
         Wh_GetIntSetting(L"goldenRatioSize", 1) != 0;
     g_settings.goldenRatioWidthPercent =
         Wh_GetIntSetting(L"goldenRatioWidthPercent", 62);
-    g_settings.extraRadius = Wh_GetIntSetting(L"extraRadius", 24);
-    g_settings.customRadius = Wh_GetIntSetting(L"customRadius", 24);
 }
 
 }  // namespace
@@ -581,13 +341,6 @@ BOOL Wh_ModInit() {
         // Appearance still works at creation time if this optional hook is
         // unavailable. Do not fail the complete mod for the layout hook.
         Wh_Log(L"ShowWindow hook unavailable; first-show reapplication disabled.");
-    }
-
-    if (!Wh_SetFunctionHook(
-            reinterpret_cast<void*>(&SetWindowPos),
-            reinterpret_cast<void*>(&SetWindowPos_Hook),
-            reinterpret_cast<void**>(&SetWindowPos_Original))) {
-        Wh_Log(L"SetWindowPos hook unavailable; extra radius updates only on show.");
     }
 
     return TRUE;

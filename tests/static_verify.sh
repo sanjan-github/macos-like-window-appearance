@@ -6,7 +6,11 @@ readme="$(dirname "$0")/../README.md"
 
 test -s "$src"
 test -s "$readme"
-grep -q '@version      1.6.0' "$src"
+grep -q '@version      1.7.0' "$src"
+if grep -Eq 'RoundingStyle::(Extra|Custom)|extraRadius|customRadius|ApplyExtraRoundedRegion|SetWindowPos_Hook' "$src"; then
+  echo 'Removed rounding options are still present' >&2
+  exit 1
+fi
 grep -q 'DWMWA_WINDOW_CORNER_PREFERENCE' "$src"
 grep -q 'kDwmColorNone' "$src"
 grep -q 'ShowWindow_Hook' "$src"
