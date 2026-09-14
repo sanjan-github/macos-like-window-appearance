@@ -204,3 +204,20 @@ The extra/custom region implementation calls the GDI functions `CreateRoundRectR
 ```
 
 Without `-lgdi32`, Windhawk reports undefined symbols for those two functions.
+
+
+## Version 1.5 caption-button fix
+
+The earlier custom-region implementation could clip the non-client area around the minimize, maximize, and close buttons when the radius became large. Version 1.5 preserves the real DWM caption-button bounds, expanded by a DPI-scaled safety margin, inside the rounded region. The buttons should remain clickable while the outer corners become much rounder.
+
+Use the custom setting as follows:
+
+```text
+Rounding style: custom
+Custom radius: 96
+Window border: none
+```
+
+The accepted custom-radius input range is **4–160 pixels**. Values near **96–160** create an almost-squircle appearance. The mod clamps the final value to half of the window's smaller dimension, preventing the rounded region from collapsing the window interior.
+
+If an application still loses caption-button interaction, switch back to `native`, restart the application, and exclude that application from the mod. Custom-framed and borderless applications can implement their own hit testing and are not universally compatible with a window-region approach.

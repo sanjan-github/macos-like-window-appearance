@@ -6,7 +6,7 @@ readme="$(dirname "$0")/../README.md"
 
 test -s "$src"
 test -s "$readme"
-grep -q '@version      1.4.0' "$src"
+grep -q '@version      1.5.0' "$src"
 grep -q 'DWMWA_WINDOW_CORNER_PREFERENCE' "$src"
 grep -q 'kDwmColorNone' "$src"
 grep -q 'ShowWindow_Hook' "$src"

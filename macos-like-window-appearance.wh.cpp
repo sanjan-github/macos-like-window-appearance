@@ -2,7 +2,7 @@
 // @id           macos-like-window-appearance-safe
 // @name         macOS-like Window Appearance (Safe)
 // @description  Applies polished Windows 11 rounded corners, suppresses the DWM outline, and optionally gives ordinary app windows a one-time centered golden-ratio size without polling, timers, window enumeration, or system-file changes.
-// @version      1.4.0
+// @version      1.5.0
 // @author       sanjan-github
 // @github       https://github.com/sanjan-github/macos-like-window-appearance
 // @include      *
@@ -69,7 +69,7 @@ public native rounded treatment instead of patching private DWM geometry.
 /*
 - rounding: native
   $name: Rounding style
-  $description: Native uses normal Windows 11 rounded corners; small uses the native small-corner style.
+  $description: Native uses normal Windows 11 rounded corners; small uses the native small-corner style; custom lets you enter a radius.
   $options:
   - native: Normal rounded corners
   - small: Small rounded corners
@@ -96,7 +96,7 @@ public native rounded treatment instead of patching private DWM geometry.
   $description: Corner diameter in pixels for extra mode. Values are clamped between 12 and 64. This mode uses a window region and may not suit custom-framed applications.
 - customRadius: 24
   $name: Custom radius
-  $description: Corner diameter in pixels for custom mode. Values are clamped between 4 and 96. Custom mode uses a window region and may not suit custom-framed applications.
+  $description: Enter a radius from 4 to 160 pixels. Values near 96 to 160 create an almost squircle shape. The value is safely clamped for each window, and caption buttons remain clickable.
 */
 // ==/WindhawkModSettings==
 
@@ -256,8 +256,8 @@ void ApplyExtraRoundedRegion(HWND hwnd) {
     if (g_settings.rounding == RoundingStyle::Custom) {
         if (radius < 4) {
             radius = 4;
-        } else if (radius > 96) {
-            radius = 96;
+        } else if (radius > 160) {
+            radius = 160;
         }
     } else if (radius < 12) {
         radius = 12;
@@ -265,11 +265,53 @@ void ApplyExtraRoundedRegion(HWND hwnd) {
         radius = 64;
     }
 
+    // Never let the ellipse consume an entire dimension. This keeps a usable
+    // interior even when a user requests an almost-squircle radius.
+    int geometricMaximum = (width < height ? width : height) / 2 - 1;
+    if (geometricMaximum < 1) {
+        g_updatingRegion = false;
+        return;
+    }
+    if (radius > geometricMaximum) {
+        radius = geometricMaximum;
+    }
+
     HRGN region = CreateRoundRectRgn(
         0, 0, width + 1, height + 1, radius * 2, radius * 2);
     if (region == nullptr) {
         g_updatingRegion = false;
         return;
+    }
+
+    // A large top-right radius can otherwise remove pixels from the caption
+    // button hit-test area. Preserve the actual DWM caption-button bounds,
+    // expanded by a small DPI-scaled tolerance, while keeping the rest of the
+    // window rounded. DWMWA_CAPTION_BUTTON_BOUNDS is window-relative.
+    RECT captionButtons{};
+    if (SUCCEEDED(DwmGetWindowAttribute(
+            hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &captionButtons,
+            sizeof(captionButtons)))) {
+        UINT dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0) {
+            dpi = 96;
+        }
+        int pad = MulDiv(6, static_cast<int>(dpi), 96);
+        HRGN captionSafety = CreateRectRgn(
+            captionButtons.left - pad,
+            captionButtons.top - pad,
+            captionButtons.right + pad,
+            captionButtons.bottom + pad);
+        if (captionSafety != nullptr) {
+            HRGN combined = CreateRectRgn(0, 0, 0, 0);
+            if (combined != nullptr &&
+                CombineRgn(combined, region, captionSafety, RGN_OR) != ERROR) {
+                DeleteObject(region);
+                region = combined;
+            } else if (combined != nullptr) {
+                DeleteObject(combined);
+            }
+            DeleteObject(captionSafety);
+        }
     }
 
     // SetWindowRgn takes ownership of region on success.
