@@ -48,7 +48,7 @@ In Windhawk, choose **Create new mod** or the equivalent local-mod editor. The e
 
 ### 3. Paste the source
 
-Open [the Windhawk source file](file:///home/ubuntu/macos-like-window-appearance.wh.cpp), copy the complete contents, and paste it into the editor. The file must remain a single `.wh.cpp` mod source file.
+Open [the Windhawk source file](macos-like-window-appearance.wh.cpp), copy the complete contents, and paste it into the editor. The file must remain a single `.wh.cpp` mod source file.
 
 ### 4. Compile before enabling
 

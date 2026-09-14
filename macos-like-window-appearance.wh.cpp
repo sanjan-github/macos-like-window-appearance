@@ -3,7 +3,8 @@
 // @name         macOS-like Window Appearance (Safe)
 // @description  Applies polished Windows 11 rounded corners, suppresses the DWM outline, and optionally gives ordinary app windows a one-time centered golden-ratio size without polling, timers, window enumeration, or system-file changes.
 // @version      1.2.0
-// @author       Local user mod
+// @author       sanjan-github
+// @github       https://github.com/sanjan-github/macos-like-window-appearance
 // @include      *
 // @exclude      dwm.exe
 // @architecture x86-64
